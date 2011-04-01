@@ -3,6 +3,8 @@ Pass JSON messages between JS Applications with AJAX Longpolling.
 Author: Sebastian Herrlinger <sebastian@formzoo.com>
 License: MIT
 
+To run the MessageBox, download jQuery and put it into /lib/jquery.js.
+
 After running MessageBox you can goto http://yourip:8000/
 which runs a messaging test. 
 Testing on different machines can be done with /sender and /receiver

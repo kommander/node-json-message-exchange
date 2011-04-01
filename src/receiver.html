@@ -1,0 +1,37 @@
+<html>
+  <head>
+    <title>Receiver</title>
+    <script type="text/javascript" src="jquery.js"></script>
+  </head>
+  
+  <body>
+    <input type="text" id="in" /> 
+    <script type="text/javascript"> 
+    
+    var recv = 0;
+    var session = makeid();
+    
+    function makeid()
+    {
+      var text = "";
+      var possible = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+      for( var i=0; i < 5; i++ )
+          text += possible.charAt(Math.floor(Math.random() * possible.length));
+      return text;
+    }
+
+    function receive(){
+      $.ajax({
+        context: this,
+        url: '/receive?user=2&session=' + session,
+        success: function(data){
+          recv++;
+          $('#in').val(recv);
+          receive();
+        }
+      });
+    }
+    receive();
+    </script> 
+  </body>
+</html>

@@ -1,0 +1,33 @@
+<html>
+  <head>
+    <title>Sender</title>
+    <script type="text/javascript" src="jquery.js"></script>
+  </head>
+  
+  <body>
+    <input type="text" id="out" />
+    <input type="button" id="start" value="start" />
+    <input type="button" id="stop" value="stop" />
+    <script type="text/javascript"> 
+     
+    var interval;
+    var sent = 0;
+    
+    $('#start').click(function(){
+      sent = 0;
+      interval = setInterval(function(){
+        sent++;
+        $.ajax({
+          url: '/send?user=1&to=2&message={test:true}'
+        });
+        $('#out').val(sent);
+      }, 10);
+    });
+    
+    $('#stop').click(function(){
+      clearInterval(interval);
+    });
+    
+    </script> 
+  </body>
+</html>

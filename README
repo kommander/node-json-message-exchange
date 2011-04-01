@@ -1,0 +1,20 @@
+Pass JSON messages between JS Applications with AJAX Longpolling.
+
+Author: Sebastian Herrlinger <sebastian@formzoo.com>
+License: MIT
+
+After running MessageBox you can goto http://yourip:8000/
+which runs a messaging test. 
+Testing on different machines can be done with /sender and /receiver
+
+# Sending Messages
+/send?user=1&to=2&message={"test":"success"}
+
+#Receiving Messages 
+/receive?user=2&session=ABCD1234
+
+The session identifies a receiver,
+if you have more than one receiver for the same user.
+
+
+Happy coding!

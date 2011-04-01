@@ -1,0 +1,41 @@
+<html>
+  <head>
+    <title>Message passing test</title>
+    <script type="text/javascript" src="jquery.js"></script>
+  </head>
+  
+  <body>
+    <input type="text" id="out" /> 
+    <input type="text" id="in" /> 
+    <script type="text/javascript"> 
+     
+    var interval;
+    var sent = 0;
+    var recv = 0;
+    interval = setInterval(function(){
+      sent++;
+      $.ajax({
+        url: '/send?user=1&to=2&message=test'
+      });
+      $('#out').val(sent);
+    }, 10);
+    
+    setTimeout(function(){
+      clearInterval(interval);
+    }, 300000);
+    
+    function receive(){
+      $.ajax({
+        context: this,
+        url: '/hold?user=2&session=fakka',
+        success: function(data){
+          recv++;
+          $('#in').val(recv);
+          receive();
+        }
+      });
+    }
+    receive();
+    </script> 
+  </body>
+</html>

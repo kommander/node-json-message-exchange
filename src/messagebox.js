@@ -19,7 +19,7 @@ var MessageBox = function() {
   
   var externalListenIp = null;
   var externalListenPort = '8000';
-  var internalListenIp = null;
+  var internalListenIp = '127.0.0.1';
   var internalListenPort = '4000';
   
   var userTimeout = 360000;
@@ -271,30 +271,16 @@ var MessageBox = function() {
     sys.puts('close');
   };
   
-  sys.puts('New MessageBox');
-  
-  //Startup
-  
-  /**
-   * Listen for other MessageBox instances
-   */
-  var internalServer = net.createServer(function(socket){
-    sys.puts('received neighbour connect');
-    socket.addListener('data', internalDataHandler);
-    neighbours[socket.remoteAddress] = socket;
-  });
-  internalServer.listen(internalListenPort, internalListenIp);
-  sys.puts('Internal listening on ' + internalListenIp + ':' + internalListenPort);
-  
-  //Announce this instance to neighbours, if given
-  for(var n in initialNeighbours){
-    var neighbourConnection = net.createConnection(initialNeighbours[n].port, initialNeighbours[n].ip);
-    neighbourConnection.addListener('connect', function(){
-      this.write(JSON.stringify({type: 'hello', port: internalListenPort}));
-    });
-    neighbours[initialNeighbours[n].ip] = neighbourConnection;
-  }
-  
+  var sendUsers = function(socket) {
+    var answer = {
+      type: 'addusers',
+      users: []
+    };
+    for(var k in users)
+      answer.users.push(k);
+    socket.write(JSON.stringify(answer));
+  };
+    
   /**
    * Handles internal communication
    */
@@ -328,18 +314,24 @@ var MessageBox = function() {
             //Tell new neighbour about users on this side
             var neighbourConnection = net.createConnection(dataObj[m].port, this.remoteAddress);
             neighbourConnection.addListener('connect', function(){
-              var answer = {
-                type: 'addusers',
-                users: []
-              };
-              for(var k in users)
-                answer.users.push(k);
-              this.write(JSON.stringify(answer));
+              this.write(JSON.stringify({type: 'welcome', port: internalListenPort}));
+              sendUsers(this);
               //TODO: tell new neighbour about other neighbours
               //TODO: Handle neighbour disconnect
             });
             neighbours[this.remoteAddress] = neighbourConnection;
           break;
+        case 'welcome':
+            sys.puts('received welcome ' + this.remoteAddress + ':' + dataObj[m].port);
+            //Tell new neighbour about users on this side
+            var neighbourConnection = net.createConnection(dataObj[m].port, this.remoteAddress);
+            neighbourConnection.addListener('connect', function(){
+              sendUsers(this);
+              //TODO: tell new neighbour about other neighbours
+              //TODO: Handle neighbour disconnect
+            });
+            neighbours[this.remoteAddress] = neighbourConnection;
+          break;       
         case 'addusers':
           sys.puts('received addusers');
           for(var k in dataObj[m].users)
@@ -358,6 +350,9 @@ var MessageBox = function() {
       }
     }
   };
+  
+  //Startup
+  sys.puts('New MessageBox');
   
   //Load index.html
   fs.readFile('./index.html', function (err, data) {
@@ -389,6 +384,24 @@ var MessageBox = function() {
   
   //Start manage cycle
   setTimeout(_manageCycle, manageTimeout);
+  
+  /**
+   * Listen for other MessageBox instances
+   */
+  var internalServer = net.createServer(function(socket){
+    sys.puts('received neighbour connect');
+    socket.addListener('data', internalDataHandler);
+  }).addListener('data', internalDataHandler);
+  internalServer.listen(internalListenPort, internalListenIp);
+  sys.puts('Internal listening on ' + internalListenIp + ':' + internalListenPort);
+  
+  //Announce this instance to neighbours, if given
+  for(var n in initialNeighbours){
+    var neighbourConnection = net.createConnection(initialNeighbours[n].port, initialNeighbours[n].ip);
+    neighbourConnection.addListener('connect', function(){
+      this.write(JSON.stringify({type: 'hello', port: internalListenPort}));
+    });
+  }
   
   var _server = http.createServer().
           addListener('request', _requestHandler)

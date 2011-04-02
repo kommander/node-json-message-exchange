@@ -3,16 +3,51 @@ Pass JSON messages between JS Applications with AJAX Longpolling.
 Author: Sebastian Herrlinger <sebastian@formzoo.com>
 License: MIT
 
+# Run
 To run the MessageBox, download jQuery and put it into /lib/jquery.js.
 
 After running MessageBox you can goto http://yourip:8000/
 which runs a messaging test. 
 Testing on different machines can be done with /sender and /receiver
 
+# Arguments
+
+node messagebox.js [argument=value ...]
+
+Arguments             Description
+
+userTimeout, ut       The timeout in seconds for a user connection 
+                      without action by a user.
+                      
+holdTimeout, ht       The timeout in seconds for a user hold connection.
+  
+neighbour, n          Lets the instance introduce itself to other instances.
+                      Can be given many times to introduce to many instances.
+                      
+manageTimeout, mt     The tick for a manage cycle in seconds.
+
+externalIp, exip      The IP the httpServer is listening on.
+  
+externalPort, exp     The Port the httpServer is listening on.
+  
+internalIp, inip      The IP the instance is listening for neighbour connections
+  
+internalPort, inp     The Port the instance is listening for neighbour connections
+  
+
+# Clustering
+To add a new instance to one or more existing instances,
+tell the new instance about at least one existing instance,
+with the "neighbour" argument on startup.
+
+node messagebox.js -neighbour=10.0.0.2:4000
+
+This will have the new instance introduce itself to other instances.
+
 # Sending Messages
 /send?user=1&to=2&message={"test":"success"}
 
-#Receiving Messages 
+# Receiving Messages 
 /receive?user=2&session=ABCD1234
 
 The session identifies a receiver,

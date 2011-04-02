@@ -2,25 +2,90 @@
   <head>
     <title>Sender</title>
     <script type="text/javascript" src="jquery.js"></script>
+    <style type="text/css">
+      #state {
+        height: 200px;
+        overflow: auto;
+      }
+    </style>
   </head>
   
   <body>
-    <input type="text" id="out" />
+    No. of Messages: <input type="text" id="number" value="2" /><br/>
+    To user: <input type="text" id="to" value="2" /><br/>
+    Text: <input type="text" id="text" value="message" /><br/>
+    Messages Sent: <input type="text" id="out" /><br/>
     <input type="button" id="start" value="start" />
     <input type="button" id="stop" value="stop" />
+    <div id="state"></div>
+    <input type="button" id="clear" value="clear" />
     <script type="text/javascript"> 
      
     var interval;
     var sent = 0;
+    var no = 2;
+    
+    $('#clear').click(function(){
+      $('#out').val('');
+      $('#state').empty();
+    });
     
     $('#start').click(function(){
       sent = 0;
+      no = parseInt($('#number').val());
+      
       interval = setInterval(function(){
-        sent++;
+        var messages = [];
+        for(var i = 0; i < no; i++)
+        {
+          messages.push('{"to": ' + $('#to').val() + ', "message": "' + $('#text').val() + '"}');
+        }
+        
         $.ajax({
-          url: '/send?user=1&to=2&message={test:true}'
+          type: 'POST',
+          url: '/send?user=1',
+          data: '{ "messages": [' + messages.join(',') + '] }',
+          dataType: 'json',
+          success: function(data){
+            if(data.status == 'ok') {
+              sent++;
+            }
+            else if(data.states) {
+              for(var k in data.states)
+              {
+                if(data.states[k].status == 'ok') {
+                  sent++;
+                }
+                else if(data.states[k].status == 'fail') {
+                  $('#state').append('Send error</br>');
+                  if(data.states[k].error) {
+                    $('#state').append(data.states[k].error + '</br>');
+                  }
+                }
+                else if(data.states[k].status == 'user_unavailable') {
+                  $('#state').append('User unavailable</br>');
+                }
+              }
+            } 
+            else if(data.status == 'fail') {
+              $('#state').append('Send error</br>');
+              if(data.error) {
+                $('#state').append(data.error + '</br>');
+              }
+              if(data.message) {
+                $('#state').append(data.message + '</br>');
+              }
+            }
+            else if(data.status == 'user_unavailable') {
+              $('#state').append('User unavailable</br>');
+            } 
+            else {
+              $('#state').append('Something unknown went wrong</br>');
+            }
+            $('#out').val(sent);
+          }
         });
-        $('#out').val(sent);
+        
       }, 10);
     });
     

@@ -30,6 +30,11 @@ var MessageBox = function() {
   var neighbours = [];
   var initialNeighbours = [];
   
+  //Stats
+  var sendRequests = 0;
+  var messagesSent = 0;
+  var messagesDelivered = 0;
+  
   //Read arguments
   process.argv.forEach(function (val, index, array) {
     if(index < 2)
@@ -102,31 +107,81 @@ var MessageBox = function() {
     },
     
     '/send' : function(request, response, query) {
-        
-      //Check parameters
-      if(!query.user || !query.to || !query.message)
-      {
-        response.writeHead(200, {'Content-Type': contentType});
-        response.end('{"status":"fail"}');
-        return;
-      }
+      sendRequests++;
       
-      //Check user availability
-      if(!users[query.to] && !neighbourUsers[query.to])
+      if(request.method == 'GET')
       {
-        response.writeHead(200, {'Content-Type': contentType});
-        response.end('{"status":"user_unavailible"}');
-        return;
+        //Check parameters
+        if(!query.user || !query.to || !query.message)
+        {
+          response.writeHead(200, {'Content-Type': contentType});
+          response.end('{"status":"fail","error":"wrong parameters"}');
+          return;
+        }
+        
+        //Check user availability
+        if(!users[to] && !neighbourUsers[to])
+        {
+          response.writeHead(200, {'Content-Type': contentType});
+          response.end('{"status":"user_unavailable"}');
+          return;
+        }
+         
+        handleSend(query.user, query.to, query.message, response);
+      } 
+      else if(request.method == 'POST') 
+      {
+        request.user = query.user;
+        request.content = [];
+        request.response = response;
+        
+        request.addListener("data", function(chunk) {
+          request.content.push(chunk);
+        });
+       
+        request.addListener("end", function() {
+          try {
+            var contentObj = JSON.parse(this.content.join());
+            
+            //Multi message
+            if(contentObj.messages) {
+              var states = [];
+              for(var k in contentObj.messages) {
+                if(!users[contentObj.messages[k].to] && !neighbourUsers[contentObj.messages[k].to])
+                {
+                  states.push('{"to": ' + contentObj.messages[k].to + ', "status":"user_unavailable"}');
+                } else {
+                  states.push('{"to": ' + contentObj.messages[k].to + ', "status":"ok"}');
+                }
+                
+                handleSend(this.user, contentObj.messages[k].to, JSON.stringify(contentObj.messages[k].message));
+              }
+              this.response.writeHead(200, {'Content-Type': contentType});
+              this.response.end('{"states":[' + states.join(',') + ']}');
+            } else {
+              //Check user availability
+              if(!users[contentObj.to] && !neighbourUsers[contentObj.to])
+              {
+                response.writeHead(200, {'Content-Type': contentType});
+                response.end('{"status":"user_unavailable"}');
+                return;
+              }
+              
+              this.response.writeHead(200, {'Content-Type': contentType});
+              this.response.end('{"status":"ok"}');
+            
+              handleSend(this.user, contentObj.to, JSON.stringify(contentObj.message));
+            }
+          } catch(e) {
+            //TODO: Log
+            sys.puts('Send Error: ' + e + ' Message: ' + this.content.join());
+            response.writeHead(200, {'Content-Type': contentType});
+            response.end('{"status":"fail", "error":"' + e + '", "message":"' + this.content.join().replace(/"/g, '\\"') + '"}');
+            return;
+          }   
+        });
       }
-           
-      if(users[query.to])
-        sendMessage(query.user, query.to, query.message);
-        
-      if(neighbourUsers[query.to])
-        sendNeighbourMessage(query.user, query.to, query.message);
-        
-      response.writeHead(200, {'Content-Type': contentType});
-      response.end('{"status":"ok"}');
+            
     },
 
     '/receive' : function(request, response, query) {
@@ -154,6 +209,7 @@ var MessageBox = function() {
       //TODO: respond with many messages
       if(users[query.user].holds[query.session].queue.length > 0)
       {
+        messagesDelivered++;
         users[query.user].holds[query.session].response.writeHead(200, {'Content-Type': contentType});
         users[query.user].holds[query.session].response.end('{"status":"ok", "from": ' + query.user + ', "message": ' + users[query.user].holds[query.session].queue.shift() + '}');
         users[query.user].holds[query.session].response = null;
@@ -162,14 +218,29 @@ var MessageBox = function() {
   }
   
   /**
+   * Handle send
+   */
+  var handleSend = function(from, to, message) {
+    
+    if(users[to])
+      sendMessage(from, to, message);
+      
+    if(neighbourUsers[to])
+      sendNeighbourMessage(from, to, message);
+      
+  };
+  
+  /**
    * Deliver a message to the other side
    */
   var sendMessage = function(from, to, message) {
+    messagesSent++;
     //Check user holding lines
     for(var k in users[to].holds)
     {
       if(users[to].holds[k].response)
       {
+        messagesDelivered++;
         users[to].holds[k].response.writeHead(200, {'Content-Type': contentType});
         users[to].holds[k].response.end('{"status":"ok", "from": ' + from + ', "message": ' + message + '}');
         users[to].holds[k].response = null;
@@ -216,6 +287,7 @@ var MessageBox = function() {
         }
       }
     }
+    sys.puts('Send Requests: ' + sendRequests + ' - Messages sent: ' + messagesSent + ' - Messages delivered: ' + messagesDelivered);
     setTimeout(_manageCycle, manageTimeout);
   };
   
@@ -223,33 +295,41 @@ var MessageBox = function() {
    * Handle an HTTP request for the MessageBox
    */
   var _requestHandler = function(request, response) {
-    var parsedUrl = url.parse(request.url, true);
-    
-    //If user is not already registered, do so (here authentication could happen)
-    if(parsedUrl.query.user && users[parsedUrl.query.user] == undefined)
-    {
-      createUser(parsedUrl.query.user);
+    try {
+      var parsedUrl = url.parse(request.url, true);
+      var query;
       
-      //Tell neighbours
-      for(var k in neighbours){
-        sys.puts('send user to neighbour ' + k);
-        neighbours[k].write(JSON.stringify({
-          type: 'adduser',
-          user: parsedUrl.query.user
-        }));
+      //If user is not already registered, do so (here authentication could happen)
+      if(parsedUrl.query.user && users[parsedUrl.query.user] == undefined)
+      {
+        createUser(parsedUrl.query.user);
+        
+        //Tell neighbours
+        for(var k in neighbours){
+          sys.puts('send user to neighbour ' + k);
+          neighbours[k].write(JSON.stringify({
+            type: 'adduser',
+            user: parsedUrl.query.user
+          }));
+        }
       }
-    }
-    else if(parsedUrl.query.user && users[parsedUrl.query.user]) {
-      users[parsedUrl.query.user].timeout = new Date().getTime()
-    }
-    
-    if(routes[parsedUrl.pathname] === undefined) {
-      response.writeHead(404, {'Content-Type': 'text/plain'});
-      response.write('not found\n');
-      response.end();
-    } else {
-      routes[parsedUrl.pathname].call(this, request, response, parsedUrl.query);
-    }
+      else if(parsedUrl.query.user && users[parsedUrl.query.user]) {
+        users[parsedUrl.query.user].timeout = new Date().getTime()
+      }
+      
+      if(routes[parsedUrl.pathname] === undefined) {
+        response.writeHead(404, {'Content-Type': 'text/plain'});
+        response.write('not found\n');
+        response.end();
+      } else {
+        routes[parsedUrl.pathname].call(this, request, response, parsedUrl.query);
+      }
+    } catch(e) {
+      //TODO: Log
+      response.writeHead(200, {'Content-Type': contentType});
+      response.end('{"status":"fail", "error":"' + e + '"}');
+      return;
+    }   
   };
   
   /**
@@ -272,13 +352,16 @@ var MessageBox = function() {
   };
   
   var sendUsers = function(socket) {
-    var answer = {
-      type: 'addusers',
-      users: []
-    };
-    for(var k in users)
-      answer.users.push(k);
-    socket.write(JSON.stringify(answer));
+    if(users.length > 0)
+    {
+      var answer = {
+        type: 'addusers',
+        users: []
+      };
+      for(var k in users)
+        answer.users.push(k);
+      socket.write(JSON.stringify(answer));
+    }
   };
     
   /**

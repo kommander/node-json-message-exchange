@@ -6,6 +6,7 @@
   
   <body>
     <input type="text" id="in" /> 
+    <div id="state"></div>
     <script type="text/javascript"> 
     
     var recv = 0;
@@ -24,8 +25,14 @@
       $.ajax({
         context: this,
         url: '/receive?user=2&session=' + session,
+        dataType: 'json',
+        error: function(xhr, status){
+          $('#state').append('error: ' + status + '<br/>');
+          receive();
+        },
         success: function(data){
-          recv++;
+          for(k in data.messages)
+            recv++;
           $('#in').val(recv);
           receive();
         }

@@ -14,8 +14,8 @@ var net = require('net');
 
 var MessageBox = function() {
   var _self = this;
-  users = [];
-  neighbourUsers = [];
+  users = {};
+  neighbourUsers = {};
   
   var externalListenIp = null;
   var externalListenPort = '8000';
@@ -26,6 +26,8 @@ var MessageBox = function() {
   var holdTimeout = 120000;
   var manageTimeout = 60000;
   var contentType = 'text/javascript';
+  
+  var multiDeliver = 10;
   
   var neighbours = [];
   var initialNeighbours = [];
@@ -209,10 +211,16 @@ var MessageBox = function() {
       //TODO: respond with many messages
       if(users[query.user].holds[query.session].queue.length > 0)
       {
-        messagesDelivered++;
+        var messages = [];
+        for(var i = 0; i < (multiDeliver > users[query.user].holds[query.session].queue.length) ? multiDeliver : users[query.user].holds[query.session].queue.length; i++)
+        {
+          messagesDelivered++;
+          messages.push(users[query.user].holds[query.session].queue.shift());
+        }
         users[query.user].holds[query.session].response.writeHead(200, {'Content-Type': contentType});
-        users[query.user].holds[query.session].response.end('{"status":"ok", "from": ' + query.user + ', "message": ' + users[query.user].holds[query.session].queue.shift() + '}');
+        users[query.user].holds[query.session].response.end('{"status":"ok", "from": ' + query.user + ', "messages": [' + messages.join(',') + ']}');
         users[query.user].holds[query.session].response = null;
+        delete messages;
       }
     }
   }
@@ -242,7 +250,7 @@ var MessageBox = function() {
       {
         messagesDelivered++;
         users[to].holds[k].response.writeHead(200, {'Content-Type': contentType});
-        users[to].holds[k].response.end('{"status":"ok", "from": ' + from + ', "message": ' + message + '}');
+        users[to].holds[k].response.end('{"status":"ok", "from": ' + from + ', "messages": [' + message + ']}');
         users[to].holds[k].response = null;
       } else {
         users[to].holds[k].queue.push(message);
@@ -254,13 +262,14 @@ var MessageBox = function() {
    * Deliver a message to a user on another server
    */
   var sendNeighbourMessage = function(from, to, message) {
-    //Check user holding lines
-    neighbourUsers[to].write(JSON.stringify({
-      type: 'message',
-      from: from,
-      to: to,
-      message: message
-    }));
+    var msg = new Buffer(13 + Buffer.byteLength(message));
+    msg[0] = 0x20;
+    writeInt32(msg, from, 1);
+    writeInt32(msg, to, 5);
+    writeInt32(msg, Buffer.byteLength(message), 9);
+    msg.write(message, 13);
+    neighbourUsers[to].write(msg);
+    delete msg;
   };
   
   /**
@@ -307,10 +316,11 @@ var MessageBox = function() {
         //Tell neighbours
         for(var k in neighbours){
           sys.puts('send user to neighbour ' + k);
-          neighbours[k].write(JSON.stringify({
-            type: 'adduser',
-            user: parsedUrl.query.user
-          }));
+          var msg = new Buffer(5);
+          msg[0] = 0x11;
+          writeInt32(msg, parsedUrl.query.user, 1);
+          neighbours[k].write(msg);
+          delete msg;
         }
       }
       else if(parsedUrl.query.user && users[parsedUrl.query.user]) {
@@ -336,7 +346,7 @@ var MessageBox = function() {
    * Create a user and announce it to neighbours
    */
   var createUser = function(id) {
-    sys.puts('create user: \'' + id + '\'');
+    sys.puts('create user: ' + id);
     users[id] = {
       timeout: new Date().getTime(),
       holds: {}
@@ -352,86 +362,100 @@ var MessageBox = function() {
   };
   
   var sendUsers = function(socket) {
-    if(users.length > 0)
-    {
-      var answer = {
-        type: 'addusers',
-        users: []
-      };
-      for(var k in users)
-        answer.users.push(k);
-      socket.write(JSON.stringify(answer));
+    var userIds = [];
+    for(var k in users) {
+      userIds.push(k);
+    }
+    if(userIds.length > 0) {
+      var msg = new Buffer(5 + userIds.length * 4);
+      msg[0] = 0x10;
+      writeInt32(msg, userIds.length, 1);
+      for(var i = 0; i < userIds.length; i++)
+      {
+        writeInt32(msg, userIds[i], 5 + 4 * i);
+      }
+      socket.write(msg);
+      delete msg;
     }
   };
     
   /**
    * Handles internal communication
    */
-  var internalDataHandler = function(data){
-    var dataObj = [];
-    try {
-      dataObj[0] = JSON.parse(String(data));
-    } catch (e){
-      try {
-        //Sometimes there are > 1 messages in data, try to recover from that
-        var dataMsgArr = String(data).split('}{');
-        for(var i = 0; i < dataMsgArr.length; i++)
-        {
-          if(dataMsgArr[i][0] != '{')
-            dataMsgArr[i] = '{' + dataMsgArr[i];
-          if(dataMsgArr[i][dataMsgArr[i].length - 1] != '}')
-            dataMsgArr[i] += '}';
-          dataObj.push(JSON.parse(String(dataMsgArr[i])));
-        }
-      } catch(e){
-        sys.puts('Failed internal message ' + data + "\nError: " + e);
-        return;
-      }
-    }
+  var internalDataHandler = function(buffer){
+    var bufferPosition = 0;
     
     //Handle each message
-    for(var m in dataObj) {
-      switch(dataObj[m].type){
-        case 'hello':
-            sys.puts('received hello ' + this.remoteAddress + ':' + dataObj[m].port);
+    while(bufferPosition < buffer.length) {
+      switch(buffer[bufferPosition]){
+        case 0x01:
+            sys.puts('received hello ' + this.remoteAddress + ':' + readInt32(buffer, 1));
             //Tell new neighbour about users on this side
-            var neighbourConnection = net.createConnection(dataObj[m].port, this.remoteAddress);
+            var neighbourConnection = net.createConnection(readInt32(buffer, 1), this.remoteAddress);
             neighbourConnection.addListener('connect', function(){
-              this.write(JSON.stringify({type: 'welcome', port: internalListenPort}));
+              var msg = new Buffer(5);
+              msg[0] = 0x02;
+              writeInt32(msg, internalListenPort, 1)
+              this.write(msg);
+              delete msg;
               sendUsers(this);
               //TODO: tell new neighbour about other neighbours
               //TODO: Handle neighbour disconnect
             });
+            neighbourConnection.setNoDelay(true);
             neighbours[this.remoteAddress] = neighbourConnection;
+            bufferPosition += 5;
           break;
-        case 'welcome':
-            sys.puts('received welcome ' + this.remoteAddress + ':' + dataObj[m].port);
+        case 0x02:
+            sys.puts('received welcome ' + this.remoteAddress + ':' + readInt32(buffer, 1));
             //Tell new neighbour about users on this side
-            var neighbourConnection = net.createConnection(dataObj[m].port, this.remoteAddress);
+            var neighbourConnection = net.createConnection(readInt32(buffer, 1), this.remoteAddress);
             neighbourConnection.addListener('connect', function(){
               sendUsers(this);
               //TODO: tell new neighbour about other neighbours
               //TODO: Handle neighbour disconnect
             });
+            neighbourConnection.setNoDelay(true);
             neighbours[this.remoteAddress] = neighbourConnection;
+            bufferPosition += 5;
           break;       
-        case 'addusers':
+        case 0x10:
           sys.puts('received addusers');
-          for(var k in dataObj[m].users)
-            neighbourUsers[dataObj[m].users[k]] = neighbours[this.remoteAddress];
+          var size = readInt32(buffer, 1);
+          for(var i = 0; i < size; i++)
+            neighbourUsers[readInt32(buffer, 5 + 4 * i)] = neighbours[this.remoteAddress];
+          bufferPosition += 5 + size * 4;
           break;
-        case 'adduser':
-          sys.puts('received neighbour adduser ' + dataObj[m].user);
-          neighbourUsers[dataObj[m].user] = neighbours[this.remoteAddress];
+        case 0x11:
+          sys.puts('received neighbour adduser ' + readInt32(buffer, 1));
+          neighbourUsers[readInt32(buffer, 1)] = neighbours[this.remoteAddress];
+          bufferPosition += 5;
           break;
-        case 'message':
+        case 0x20:
           //Put message through to user
-          sendMessage(dataObj[m].from, dataObj[m].to, dataObj[m].message);
+          var messageSize = readInt32(buffer, 9) + 13;
+          sendMessage(readInt32(buffer, 1), readInt32(buffer, 5), buffer.toString('utf-8', 13, messageSize));
+          bufferPosition += messageSize;
           break;
         default:
-          sys.puts('neighbour message unknown: ' + data);
+          sys.puts('neighbour message unknown: ' + buffer);
       }
     }
+  };
+  
+  var writeInt32 = function(buffer, integer, offset) {
+    if(!offset)
+      offset = 0;
+    buffer[offset] = (integer >>> 24);
+    buffer[offset + 1] = (integer >>> 16);
+    buffer[offset + 2] = (integer >>> 8);
+    buffer[offset + 3] = integer;
+  };
+  
+  var readInt32 = function(buffer, offset) {
+    if(!offset)
+      offset = 0;
+    return (buffer[offset] << 24) | (buffer[offset + 1] << 16) | (buffer[offset + 2] << 8) | buffer[offset + 3];
   };
   
   //Startup
@@ -474,7 +498,7 @@ var MessageBox = function() {
   var internalServer = net.createServer(function(socket){
     sys.puts('received neighbour connect');
     socket.addListener('data', internalDataHandler);
-  }).addListener('data', internalDataHandler);
+  });
   internalServer.listen(internalListenPort, internalListenIp);
   sys.puts('Internal listening on ' + internalListenIp + ':' + internalListenPort);
   
@@ -482,7 +506,10 @@ var MessageBox = function() {
   for(var n in initialNeighbours){
     var neighbourConnection = net.createConnection(initialNeighbours[n].port, initialNeighbours[n].ip);
     neighbourConnection.addListener('connect', function(){
-      this.write(JSON.stringify({type: 'hello', port: internalListenPort}));
+      var msg = new Buffer(5);
+      msg[0] = 0x01; 
+      writeInt32(msg, internalListenPort, 1);
+      this.end(msg);
     });
   }
   
